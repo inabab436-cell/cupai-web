@@ -3,8 +3,8 @@
     "capability": "code",
     "source": "GitHub main 3cc766a",
     "outcome": "copy",
-    "status": "in_progress",
-    "next_action": "Copy complete source and preserve starter runtime"
+    "status": "copied",
+    "next_action": "Complete source copied; runtime bootstrap and generated integrations preserved"
   },
   {
     "capability": "schema",
@@ -94,7 +94,7 @@
     "capability": "verification",
     "source": "Source tests and browser",
     "outcome": "verify",
-    "status": "pending",
-    "next_action": "Verify preview; authenticated data flows blocked by missing baseline/data"
+    "status": "partial",
+    "next_action": "Homepage renders without browser errors; data/auth flows blocked by missing baseline and exports"
   }
 ]
