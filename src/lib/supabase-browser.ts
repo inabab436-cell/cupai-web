@@ -5,25 +5,12 @@
  * `cupai_cs` cookie system; this client only performs the Google OAuth
  * handshake and hands the resulting access token to a server function.
  */
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-
-import { getSupabasePublicConfig } from "@/lib/supabase-public.functions";
-
-let cached: SupabaseClient | null = null;
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { supabase } from "@/integrations/supabase/client";
+import { lovable } from "@/integrations/lovable";
 
 export async function getBrowserSupabase(): Promise<SupabaseClient> {
-  if (cached) return cached;
-  const { url, anonKey } = await getSupabasePublicConfig();
-  cached = createClient(url, anonKey, {
-    auth: {
-      persistSession: true,
-      autoRefreshToken: false,
-      detectSessionInUrl: false,
-      flowType: "pkce",
-      storageKey: "cupai-google-oauth",
-    },
-  });
-  return cached;
+  return supabase;
 }
 
 export type GoogleIntent = { kind: "merchant" };
@@ -51,13 +38,10 @@ export function clearGoogleIntent() {
 /** Start the Google OAuth redirect flow. */
 export async function startGoogleSignIn(intent: GoogleIntent) {
   saveGoogleIntent(intent);
-  const supabase = await getBrowserSupabase();
-  const { error } = await supabase.auth.signInWithOAuth({
-    provider: "google",
-    options: {
-      redirectTo: `${window.location.origin}/auth/callback`,
-      queryParams: { prompt: "select_account" },
-    },
+  const result = await lovable.auth.signInWithOAuth("google", {
+    redirect_uri: `${window.location.origin}/auth/callback`,
+    extraParams: { prompt: "select_account" },
   });
-  if (error) throw new Error(error.message);
+  if (result.error) throw new Error(result.error.message);
+  if (!result.redirected) window.location.assign("/auth/callback");
 }

@@ -8,5 +8,13 @@
 import { createFileRoute, Outlet } from "@tanstack/react-router";
 
 export const Route = createFileRoute("/c/$slug")({
+  head: ({ params }) => ({ meta: [
+    { title: `${params.slug} — متجر Cupai` },
+    { name: "description", content: "تصفح المنتجات واطلب من متجر Cupai." },
+    { property: "og:title", content: `${params.slug} — متجر Cupai` },
+    { property: "og:description", content: "تصفح المنتجات واطلب من متجر Cupai." },
+    { property: "og:type", content: "website" },
+    { name: "twitter:card", content: "summary" },
+  ] }),
   component: () => <Outlet />,
 });
