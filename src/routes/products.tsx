@@ -639,7 +639,6 @@ function AddProductDialog({
   const imgs = usePendingImages();
   const [showErrors, setShowErrors] = useState(false);
   const [offerOn, setOfferOn] = useState(false);
-  const [offerType, setOfferType] = useState<"percent" | "amount">("percent");
   const [offerValue, setOfferValue] = useState("");
 
   function reset() {
