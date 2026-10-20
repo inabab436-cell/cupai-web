@@ -19,17 +19,15 @@ import {
   type WebsiteProductDTO,
   type ProductSalesDTO,
 } from "@/lib/website-products.functions";
-import { addVariantStock, createManualProduct, type ManualVariantInput } from "@/lib/inventory.functions";
+import { addVariantStock, createManualProduct } from "@/lib/inventory.functions";
 import { setProductPieceOffer } from "@/lib/product-offers.functions";
 import { ProductOfferControl, usePieceOffers } from "@/components/products/product-offer-control";
-import { requireQuantity } from "@/lib/variant-quantity";
+import { requirePrice } from "@/lib/product-required-fields";
 import {
-  missingRequiredFields,
-  requireMaterial,
-  requirePrice,
-  requireSize,
-  requireVariantRows,
-} from "@/lib/product-required-fields";
+  buildMatrix, cleanSpecs, matrixFromVariants, matrixToVariants, mergeLabels, norm, usedLabels,
+  type MatrixRow, type ProductSpec,
+} from "@/lib/variant-matrix";
+import { ImageGroupChips, SpecsEditor, VariantMatrixEditor } from "@/components/products/variant-matrix-editor";
 
 
 
@@ -478,67 +476,11 @@ function QuickStockDialog({
 
 
 // ---------------------------------------------------------------------------
-// Manual Add Product dialog — creates a staging_products row inside a fresh
-// analysis_batch and redirects the merchant to the batch review page so the
-// existing approval flow handles the actual publish.
+// Product form (add + edit). Colours and sizes are typed once (bulk), every
+// combination is generated automatically into ONE table for stock / price,
+// and unavailable combinations are simply excluded. Images are general by
+// default; linking an image to a colour is optional.
 // ---------------------------------------------------------------------------
-
-/** ONE row = one colour + one size + one quantity. Multi-size rows are not allowed. */
-type AddColor = {
-  /** Stable image-group key. Rows of the SAME colour share the same gkey, so
-   *  every size of that colour is linked to the same colour images. */
-  gkey: string;
-  label: string;
-  size: string;
-  quantity: string;
-};
-
-let addGroupSeq = 0;
-const nextAddGroupKey = () => `a${++addGroupSeq}`;
-
-/** Normalised key used to decide that two images share the same colour. */
-function colorKey(label: string) {
-  return label.trim().toLowerCase().replace(/\s+/g, " ");
-}
-
-/** Unique named colours (one per group) for the image colour chips. */
-function colorOptions(rows: { gkey: string; label: string }[]) {
-  return Array.from(
-    new Map(rows.filter((c) => c.label.trim()).map((c) => [colorKey(c.label), { gkey: c.gkey, label: c.label.trim() }] as const)).values(),
-  );
-}
-
-/** Tap-to-link colour buttons shown under each image. */
-function ColorChips({
-  options, value, onPick,
-}: {
-  options: { gkey: string; label: string }[];
-  value: string;
-  onPick: (gkey: string) => void;
-}) {
-  if (options.length === 0) {
-    return <p className="mt-1 text-center text-[10px] text-muted-foreground">أضف الألوان أدناه لربطها</p>;
-  }
-  return (
-    <div className="mt-1.5 flex flex-wrap justify-center gap-1">
-      {options.map((o) => {
-        const active = o.gkey === value;
-        return (
-          <button
-            key={o.gkey}
-            type="button"
-            onClick={() => onPick(active ? "" : o.gkey)}
-            className={`rounded-full border px-2 py-0.5 text-[10px] font-medium transition ${
-              active ? "border-primary bg-primary text-primary-foreground" : "border-border bg-background hover:border-primary/60"
-            }`}
-          >
-            {o.label}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
 
 /** Big, first-thing upload area for product images. */
 function UploadZone({ onFiles }: { onFiles: (list: FileList | null) => void }) {
@@ -554,12 +496,143 @@ function UploadZone({ onFiles }: { onFiles: (list: FileList | null) => void }) {
         <ImagePlus className="h-6 w-6 text-primary" />
       </span>
       <span className="text-sm font-semibold">ارفع صور المنتج</span>
-      <span className="text-xs text-muted-foreground">اختر عدة صور أو اسحبها هنا، ثم اضغط لون كل صورة</span>
+      <span className="text-xs text-muted-foreground">الصور عامة للمنتج تلقائيًا — وتقدر (اختياري) تخصص أي صورة للون معيّن</span>
       <input type="file" accept="image/*" multiple className="hidden" onChange={(e) => { onFiles(e.target.files); e.currentTarget.value = ""; }} />
     </label>
   );
 }
 
+type PendingImage = { id: number; file: File; url: string; color: string };
+let pendingSeq = 0;
+
+type ProductFormState = {
+  name: string;
+  description: string;
+  material: string;
+  price: string;
+  colors: string[];
+  sizes: string[];
+  rows: MatrixRow[];
+  specs: ProductSpec[];
+};
+
+const emptyForm = (): ProductFormState => ({
+  name: "", description: "", material: "", price: "",
+  colors: [], sizes: [], rows: buildMatrix([], []), specs: [],
+});
+
+function formFromProduct(p: WebsiteProductDTO): ProductFormState {
+  const rows = matrixFromVariants(p.colors.map((c) => c.label), p.sizes.map((s) => s.label), p.variants);
+  const colors = mergeLabels(p.colors.map((c) => c.label), p.variants.map((v) => v.color ?? "").filter(Boolean));
+  const sizes = mergeLabels(p.sizes.map((s) => s.label), p.variants.map((v) => v.size ?? "").filter(Boolean));
+  return {
+    name: p.name, description: p.description ?? "", material: p.material ?? "",
+    price: p.price != null ? String(p.price) : "",
+    colors, sizes, rows, specs: p.attributes ?? [],
+  };
+}
+
+/** Validated payload shared by create + edit. */
+function preparePayload(f: ProductFormState) {
+  if (!f.name.trim()) throw new Error("اكتب اسم المنتج.");
+  const price = requirePrice(f.price);
+  const variants = matrixToVariants(f.rows);
+  const used = usedLabels(f.rows);
+  return {
+    name: f.name.trim(),
+    description: f.description.trim() || null,
+    material: f.material.trim() || null,
+    price,
+    variants,
+    colors: used.colors,
+    sizes: used.sizes,
+    attributes: cleanSpecs(f.specs),
+  };
+}
+
+function ProductFormFields({
+  form, setForm, showErrors,
+}: { form: ProductFormState; setForm: (f: ProductFormState) => void; showErrors: boolean }) {
+  const err = (bad: boolean) => (showErrors && bad ? "border-destructive ring-1 ring-destructive" : "");
+  const p = Number(form.price);
+  return (
+    <>
+      <section className="space-y-3 border-b border-border pb-5">
+        <h4 className="text-sm font-semibold">٢. بيانات المنتج</h4>
+        <div className="space-y-1.5">
+          <label className="text-xs font-medium">اسم المنتج</label>
+          <Input className={err(!form.name.trim())} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="مثال: تيشيرت قطن" />
+        </div>
+        <div className="space-y-1.5">
+          <label className="text-xs font-medium">الوصف</label>
+          <Textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} rows={3} />
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium">السعر الأساسي (ج.م)</label>
+            <Input className={err(!(p > 0))} type="number" value={form.price} onChange={(e) => setForm({ ...form, price: e.target.value })} />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium">الخامة (اختياري)</label>
+            <Input value={form.material} onChange={(e) => setForm({ ...form, material: e.target.value })} placeholder="مثال: قطن ١٠٠٪" />
+          </div>
+        </div>
+      </section>
+
+      <section className="space-y-3 border-b border-border pb-5">
+        <h4 className="text-sm font-semibold">٣. الاختيارات والمخزون</h4>
+        <VariantMatrixEditor
+          colors={form.colors} sizes={form.sizes} rows={form.rows} basePrice={form.price}
+          onChange={(n) => setForm({ ...form, ...n })}
+        />
+      </section>
+
+      <section className="space-y-3">
+        <h4 className="text-sm font-semibold">٤. خصائص إضافية (اختياري)</h4>
+        <p className="text-xs text-muted-foreground">أي معلومة حسب نوع المنتج: الوزن، السعة، بلد الصنع، الضمان…</p>
+        <SpecsEditor specs={form.specs} onChange={(specs) => setForm({ ...form, specs })} />
+      </section>
+    </>
+  );
+}
+
+async function uploadPending(productId: string, pending: PendingImage[], colors: { id: string; label: string }[]) {
+  const idByLabel = new Map(colors.map((c) => [norm(c.label), c.id] as const));
+  for (const img of pending) {
+    const fd = new FormData();
+    fd.append("file", img.file);
+    fd.append("productId", productId);
+    const cid = img.color ? idByLabel.get(norm(img.color)) : undefined;
+    if (cid) fd.append("colorId", cid);
+    await uploadProductImage({ data: fd });
+  }
+}
+
+function usePendingImages() {
+  const [pending, setPending] = useState<PendingImage[]>([]);
+  const add = (list: FileList | null) => {
+    const picked = Array.from(list ?? []).filter((f) => /^image\//i.test(f.type));
+    if (picked.length) setPending((prev) => [...prev, ...picked.map((file) => ({ id: ++pendingSeq, file, url: URL.createObjectURL(file), color: "" }))]);
+  };
+  const remove = (id: number) => setPending((prev) => prev.filter((p) => p.id !== id));
+  const setColor = (id: number, color: string) => setPending((prev) => prev.map((p) => (p.id === id ? { ...p, color } : p)));
+  return { pending, setPending, add, remove, setColor };
+}
+
+function PendingThumb({ img, colors, onRemove, onColor }: { img: PendingImage; colors: string[]; onRemove: () => void; onColor: (c: string) => void }) {
+  return (
+    <div className="w-28 rounded-lg border border-dashed border-primary/50 p-1.5">
+      <div className="relative">
+        <img src={img.url} alt={img.file.name} className="h-24 w-full rounded-md object-cover" />
+        <button type="button" onClick={onRemove} aria-label="حذف الصورة"
+          className="absolute left-1 top-1 grid h-5 w-5 place-items-center rounded-full bg-destructive text-destructive-foreground">
+          <X className="h-3 w-3" />
+        </button>
+      </div>
+      <ImageGroupChips colors={colors} value={img.color} onPick={onColor} />
+    </div>
+  );
+}
 
 function AddProductDialog({
   open, onOpenChange, onCreated,
@@ -568,166 +641,23 @@ function AddProductDialog({
   onOpenChange: (v: boolean) => void;
   onCreated: (productId: string) => void;
 }) {
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [material, setMaterial] = useState("");
-
-  const [price, setPrice] = useState("");
+  const [form, setForm] = useState<ProductFormState>(emptyForm);
+  const imgs = usePendingImages();
+  const [showErrors, setShowErrors] = useState(false);
   const [offerOn, setOfferOn] = useState(false);
   const [offerType, setOfferType] = useState<"percent" | "amount">("percent");
   const [offerValue, setOfferValue] = useState("");
-  
-  const [colors, setColors] = useState<AddColor[]>(() => [{ gkey: nextAddGroupKey(), label: "", size: "", quantity: "" }]);
-  // Images picked before the product exists, keyed by colour group key ("g" = intake).
-  const [pendingImages, setPendingImages] = useState<Record<string, File[]>>({});
-  const [showErrors, setShowErrors] = useState(false);
-
-  // Always-fresh view of `colors` for use after awaits.
-  const colorsRef = useRef<AddColor[]>(colors);
-  colorsRef.current = colors;
-
-  function addColorRow() {
-    setColors((rows) => [...rows, { gkey: nextAddGroupKey(), label: "", size: "", quantity: "" }]);
-  }
-  function addSizeRow(group: AddColor) {
-    setColors((rows) => {
-      const last = rows.map((row) => row.gkey).lastIndexOf(group.gkey);
-      const next = [...rows];
-      next.splice(last + 1, 0, { ...group, size: "", quantity: "" });
-      return next;
-    });
-  }
-
-  function removeFile(key: string, index: number) {
-    setPendingImages((prev) => ({
-      ...prev, [key]: (prev[key] ?? []).filter((_, i) => i !== index),
-    }));
-  }
-  function patchColor(i: number, patch: Partial<AddColor>) {
-    setColors((rows) => {
-      const target = rows[i];
-      if (!target) return rows;
-      // Renaming a colour renames every row that shares its image group, so the
-      // colour ⇄ image link stays intact across all of its sizes.
-      return rows.map((r, j) => {
-        if (j === i) return { ...r, ...patch };
-        if (patch.label !== undefined && r.gkey === target.gkey) {
-          return { ...r, label: patch.label };
-        }
-        return r;
-      });
-    });
-  }
-
-  function removeGroup(gkey: string) {
-    setColors((rows) => rows.filter((r) => r.gkey !== gkey));
-    setPendingImages((prev) => {
-      const out: Record<string, File[]> = { ...prev, g: [...(prev.g ?? []), ...(prev[gkey] ?? [])] };
-      delete out[gkey];
-      return out;
-    });
-  }
-
-  /** Remove a row; if it was the last row of its group, its images go back to intake. */
-  function removeColor(i: number) {
-    const gone = colorsRef.current[i];
-    const rest = colorsRef.current.filter((_, j) => j !== i);
-    setColors(rest);
-    if (!gone) return;
-    if (rest.some((r) => r.gkey === gone.gkey)) return;
-    setPendingImages((prev) => {
-      const out: Record<string, File[]> = { ...prev, g: [...(prev["g"] ?? []), ...(prev[gone.gkey] ?? [])] };
-      delete out[gone.gkey];
-      return out;
-    });
-  }
-
-  /** Move one pending image between the general area and a named colour. */
-  function moveFile(fromKey: string, index: number, toKey: string) {
-    const file = (pendingImages[fromKey] ?? [])[index];
-    if (!file) return;
-    const target = toKey;
-    if (target === fromKey) return;
-    setPendingImages((prev) => ({
-      ...prev,
-      [fromKey]: (prev[fromKey] ?? []).filter((_, i) => i !== index),
-      [target]: [...(prev[target] ?? []), file],
-    }));
-  }
-
 
   function reset() {
-    setName(""); setDescription(""); setMaterial(""); setPrice("");
-    setColors([{ gkey: nextAddGroupKey(), label: "", size: "", quantity: "" }]); setPendingImages({});
+    setForm(emptyForm()); imgs.setPending([]); setShowErrors(false);
+    setOfferOn(false); setOfferValue("");
   }
-
-
-  /** Add selected product images to the unassigned image area. */
-  function addIntakeFiles(list: FileList | null) {
-    const picked = Array.from(list ?? []).filter((f) => /^image\//i.test(f.type));
-    if (picked.length === 0) return;
-    setPendingImages((prev) => ({ ...prev, g: [...(prev["g"] ?? []), ...picked] }));
-  }
-
-
 
   const createMut = useMutation({
     mutationFn: async () => {
-      // Material, price and quantity are mandatory basic fields.
-      const materialValue = requireMaterial(material);
-      const priceValue = requirePrice(price);
-      requireVariantRows(colors.filter((c) => c.label.trim()).length);
-
-      const sizes = Array.from(
-        new Set(colors.map((c) => c.size.trim()).filter(Boolean)),
-      );
-      const colorList = Array.from(
-        new Set(colors.map((c) => c.label.trim()).filter(Boolean)),
-      );
-      const vs: ManualVariantInput[] = [];
-      colors.forEach((c) => {
-        const label = c.label.trim();
-        if (!label) return;
-        // Quantity is MANDATORY: a null stock row is later read as
-        // "unavailable" and then flips once the merchant fills it in, which is
-        // exactly the availability contradiction this guard prevents.
-        const qty = requireQuantity(c.quantity, label);
-        const size = requireSize(c.size, label);
-        vs.push({ color: label, size, quantity: qty });
-      });
-
-      const res = await createManualProduct({
-        data: {
-          name: name.trim(),
-          description: description.trim() || null,
-          material: materialValue,
-          price: priceValue,
-
-          colors: colorList,
-          sizes,
-          variants: vs,
-        },
-      });
-
-
-      // Upload the picked images through the existing product-image upload
-      // mechanism, attaching each one to its colour.
-      const colorIdByLabel = new Map(
-        (res.colors ?? []).map((c) => [c.label.toLowerCase(), c.id] as const),
-      );
-      for (const [key, files] of Object.entries(pendingImages)) {
-        const label =
-          key === "g" ? "" : (colors.find((c) => c.gkey === key)?.label ?? "").trim();
-
-        for (const file of files) {
-          const fd = new FormData();
-          fd.append("file", file);
-          fd.append("productId", res.productId);
-          const cid = label ? colorIdByLabel.get(label.toLowerCase()) : null;
-          if (cid) fd.append("colorId", cid);
-          await uploadProductImage({ data: fd });
-        }
-      }
+      const data = preparePayload(form);
+      const res = await createManualProduct({ data });
+      await uploadPending(res.productId, imgs.pending, res.colors ?? []);
       if (offerOn && Number(offerValue) > 0) {
         try {
           await setProductPieceOffer({ data: { productId: res.productId, discount_type: offerType, discount_value: Number(offerValue) } });
@@ -737,122 +667,38 @@ function AddProductDialog({
       }
       return res;
     },
-    onSuccess: (r) => {
-      reset();
-      onCreated(r.productId);
-    },
+    onSuccess: (r) => { reset(); onCreated(r.productId); },
     onError: (e) => toast.error(e instanceof Error ? e.message : "فشل إنشاء المنتج."),
   });
 
-  const bad = showErrors ? missingRequiredFields({ name, material, price, rows: colors }) : new Set<string>();
-  const err = (k: string) => (bad.has(k) ? "border-destructive ring-1 ring-destructive" : "");
-
   function trySave() {
-    const missing = missingRequiredFields({ name, material, price, rows: colors });
-    if (missing.size > 0) {
-      setShowErrors(true);
-      toast.error("أكمل الخانات المحددة باللون الأحمر.");
-      return;
-    }
+    setShowErrors(true);
+    try { preparePayload(form); } catch (e) { toast.error(e instanceof Error ? e.message : "أكمل البيانات."); return; }
     createMut.mutate();
   }
 
-  const allFiles = Object.entries(pendingImages).flatMap(([key, files]) => files.map((f, k) => ({ key, f, k })));
-
   return (
-    <Dialog open={open} onOpenChange={(v) => { onOpenChange(v); if (!v) { reset(); setShowErrors(false); } }}>
+    <Dialog open={open} onOpenChange={(v) => { onOpenChange(v); if (!v) reset(); }}>
       <DialogContent dir="rtl" className="max-h-[88vh] max-w-2xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle>إضافة منتج جديد</DialogTitle>
-          <DialogDescription>
-            ارفع صور المنتج، اربط كل صورة بلونها بضغطة، ثم أكمل البيانات.
-          </DialogDescription>
+          <DialogDescription>ارفع الصور، اكتب الألوان والمقاسات مرة واحدة، وعدّل الكميات من جدول واحد.</DialogDescription>
         </DialogHeader>
 
         <div className="space-y-5">
-          {/* Images first */}
           <section className="space-y-3 border-b border-border pb-5">
             <h4 className="text-sm font-semibold">١. صور المنتج</h4>
-            <UploadZone onFiles={addIntakeFiles} />
-            {allFiles.length > 0 && (
+            <UploadZone onFiles={imgs.add} />
+            {imgs.pending.length > 0 && (
               <div className="flex flex-wrap gap-3">
-                {allFiles.map(({ key, f, k }) => (
-                  <div key={`${key}-${f.name}-${k}`} className="w-28 rounded-lg border border-border/60 p-1.5">
-                    <div className="relative">
-                      <img src={URL.createObjectURL(f)} alt={f.name} className="h-24 w-full rounded-md object-cover" />
-                      <button type="button" onClick={() => removeFile(key, k)} aria-label="حذف الصورة"
-                        className="absolute left-1 top-1 grid h-5 w-5 place-items-center rounded-full bg-destructive text-destructive-foreground">
-                        <X className="h-3 w-3" />
-                      </button>
-                    </div>
-                    <ColorChips
-                      options={colorOptions(colors)}
-                      value={colors.some((c) => c.gkey === key && c.label.trim()) ? key : ""}
-                      onPick={(to) => moveFile(key, k, to || "g")}
-                    />
-                  </div>
+                {imgs.pending.map((img) => (
+                  <PendingThumb key={img.id} img={img} colors={usedLabels(form.rows).colors}
+                    onRemove={() => imgs.remove(img.id)} onColor={(c) => imgs.setColor(img.id, c)} />
                 ))}
               </div>
             )}
           </section>
-
-          {/* Basic info */}
-          <section className="space-y-3 border-b border-border pb-5">
-            <h4 className="text-sm font-semibold">٢. بيانات المنتج</h4>
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium">اسم المنتج</label>
-              <Input className={err("name")} value={name} onChange={(e) => setName(e.target.value)} placeholder="مثال: تيشيرت قطن" />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium">الوصف</label>
-              <Textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={3} />
-            </div>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium">الخامة</label>
-                <Input className={err("material")} value={material} onChange={(e) => setMaterial(e.target.value)} placeholder="مثال: قطن ١٠٠٪" />
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium">السعر (ج.م)</label>
-                <Input className={err("price")} type="number" value={price} onChange={(e) => setPrice(e.target.value)} />
-              </div>
-            </div>
-          </section>
-
-          {/* Colours */}
-          <section className="space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <h4 className={`text-sm font-semibold ${bad.has("rows") ? "text-destructive" : ""}`}>٣. الألوان والمقاسات والكميات</h4>
-              <Button size="sm" variant="outline" type="button" onClick={() => addColorRow()}>
-                <Plus className="ml-1 h-3.5 w-3.5" /> إضافة لون
-              </Button>
-            </div>
-            {Array.from(new Map(colors.map((c) => [c.gkey, c] as const)).values()).map((group) => {
-              const gi = colors.findIndex((c) => c.gkey === group.gkey);
-              return (
-              <div key={group.gkey} className="space-y-3 rounded-md border border-border bg-muted/30 p-3">
-                <div className="flex items-end gap-2">
-                  <label className="min-w-0 flex-1 space-y-1 text-xs font-medium">اللون
-                    <Input className={err(`label-${gi}`)} value={group.label} placeholder="مثال: أحمر" onChange={(e) => patchColor(gi, { label: e.target.value })} />
-                  </label>
-                  <Button size="icon" variant="ghost" type="button" aria-label="حذف اللون" onClick={() => removeGroup(group.gkey)}><Trash2 className="h-4 w-4" /></Button>
-                </div>
-                {colors.map((c, i) => c.gkey === group.gkey && (
-                  <div key={i} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-end gap-2">
-                    <label className="min-w-0 space-y-1 text-xs text-muted-foreground">المقاس
-                      <Input className={err(`size-${i}`)} value={c.size} placeholder="مثال: L" onChange={(e) => patchColor(i, { size: e.target.value })} />
-                    </label>
-                    <label className="min-w-0 space-y-1 text-xs text-muted-foreground">الكمية
-                      <Input className={err(`qty-${i}`)} type="number" min={0} value={c.quantity} placeholder="0" onChange={(e) => patchColor(i, { quantity: e.target.value })} />
-                    </label>
-                    <Button size="icon" variant="ghost" type="button" aria-label="حذف المقاس" disabled={colors.filter((r) => r.gkey === group.gkey).length === 1} onClick={() => removeColor(i)}><X className="h-4 w-4" /></Button>
-                  </div>
-                ))}
-                <Button size="sm" variant="ghost" type="button" onClick={() => addSizeRow(group)}><Plus className="ml-1 h-3.5 w-3.5" /> إضافة مقاس</Button>
-              </div>
-              );
-            })}
-          </section>
+          <ProductFormFields form={form} setForm={setForm} showErrors={showErrors} />
         </div>
 
         <section className="space-y-2 rounded-xl border border-border p-3">
@@ -868,9 +714,6 @@ function AddProductDialog({
                 <Button size="sm" type="button" variant={offerType === "amount" ? "default" : "outline"} onClick={() => setOfferType("amount")}>مبلغ من القطعة</Button>
               </div>
               <Input type="number" min={0} value={offerValue} onChange={(e) => setOfferValue(e.target.value)} placeholder={offerType === "percent" ? "مثال: 20" : "مثال: 100"} />
-              {Number(price) > 0 && Number(offerValue) > 0 && (
-                <p className="text-xs text-muted-foreground">السعر بعد الخصم: <span className="font-bold text-destructive">{Math.max(0, Math.round((Number(price) - (offerType === "percent" ? Number(price) * Number(offerValue) / 100 : Number(offerValue))) * 100) / 100)}</span> بدل <span className="line-through">{price}</span></p>
-              )}
             </>
           )}
         </section>
@@ -886,30 +729,6 @@ function AddProductDialog({
   );
 }
 
-
-// ---------------------------------------------------------------------------
-// Edit Product dialog — edits the core fields, the colour/size lists, and the
-// images attached to each colour. Uses the existing product server functions
-// only (upsert / upload image / delete image); the automatic description
-// generation keeps running exactly as before (it is triggered by the same
-// image-upload path and by the existing freshness sweep).
-// ---------------------------------------------------------------------------
-
-type EditColor = {
-  id?: string;
-  /** Stable local key: pending (unsaved) images are grouped by this, so a
-   *  rename never loses the images attached to the group. */
-  gkey: string;
-  label: string;
-  hex: string | null;
-  /** Exactly ONE size per row. */
-  size: string;
-  quantity: string;
-};
-
-let editGroupSeq = 0;
-const nextGroupKey = () => `g${++editGroupSeq}`;
-
 function EditProductDialog({
   product, onOpenChange, onSaved,
 }: {
@@ -919,57 +738,18 @@ function EditProductDialog({
 }) {
   const qc = useQueryClient();
   const editOffersQ = usePieceOffers();
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [material, setMaterial] = useState("");
-
-  const [price, setPrice] = useState("");
-  const [colors, setColors] = useState<EditColor[]>([]);
-  
-  // New images picked in this session, keyed by colour group key ("" = general).
-  const [pending, setPending] = useState<Record<string, File[]>>({});
-  /** Saved images manually moved to a colour in this editing session. */
+  const [form, setForm] = useState<ProductFormState>(emptyForm);
+  const imgs = usePendingImages();
+  /** Saved image → colour label ("" = general) changed in this session. */
   const [savedAssign, setSavedAssign] = useState<Record<string, string>>({});
   const [loadedId, setLoadedId] = useState<string | null>(null);
   const [showErrors, setShowErrors] = useState(false);
 
-
-  const colorsRef = useRef<EditColor[]>(colors);
-  colorsRef.current = colors;
-  const pendingRef = useRef<Record<string, File[]>>(pending);
-  pendingRef.current = pending;
-
-  // Load the product into the form when it changes (no effect needed: the
-  // dialog is keyed by the product id we last hydrated from).
   if (product && loadedId !== product.id) {
     setLoadedId(product.id);
-    setName(product.name);
-    setDescription(product.description ?? "");
-    setMaterial(product.material ?? "");
-
-    setPrice(product.price != null ? String(product.price) : "");
-    // One row per (colour, size) pair — a colour with three sizes becomes three
-    // independent rows, each with its own quantity.
-    setColors(
-      product.colors.flatMap((c) => {
-        const vs = product.variants.filter(
-          (v) => (v.color ?? "").toLowerCase() === c.label.toLowerCase(),
-        );
-        const base = { id: c.id, label: c.label, hex: c.hex, gkey: nextGroupKey() };
-        if (vs.length === 0) {
-          return [{ ...base, size: "", quantity: "" }];
-        }
-        return vs.map((v) => ({
-          ...base,
-          gkey: base.gkey,
-          size: v.size ?? "",
-          quantity: v.quantity != null ? String(v.quantity) : "",
-        }));
-      }),
-    );
-    setPending({});
+    setForm(formFromProduct(product));
+    imgs.setPending([]);
     setSavedAssign({});
-
   }
 
   const delImg = useMutation({
@@ -978,60 +758,29 @@ function EditProductDialog({
     onError: (e) => toast.error(e instanceof Error ? e.message : "فشل حذف الصورة."),
   });
 
-
-
   const save = useMutation({
     mutationFn: async () => {
       if (!product) return;
-      const cleanColors = colors.filter((c) => c.label.trim());
-      // Material, price and quantity stay mandatory when editing too.
-      const materialValue = requireMaterial(material);
-      const priceValue = requirePrice(price);
-      requireVariantRows(cleanColors.length);
-
-      const allSizes = Array.from(
-        new Set(cleanColors.map((c) => c.size.trim()).filter(Boolean)),
-      );
-      const variants: { color: string | null; size: string | null; quantity: number | null }[] = [];
-      for (const c of cleanColors) {
-        const label = c.label.trim();
-        const qty = requireQuantity(c.quantity, label);
-        const size = requireSize(c.size, label);
-        variants.push({ color: label, size, quantity: qty });
-      }
-      const labelByKeyAll = new Map(colors.map((c) => [c.gkey, c.label.trim()] as const));
+      const data = preparePayload(form);
+      // Keep every listed colour as a colour row so images linked to a colour
+      // whose combinations are temporarily excluded keep their link.
+      const colorRows = mergeLabels(data.colors, form.colors);
       const res = await upsertWebsiteProduct({
         data: {
           id: product.id,
-          name: name.trim(),
-          description: description.trim() || null,
-          material: materialValue,
-
-          price: priceValue,
-
+          name: data.name,
+          description: data.description,
+          material: data.material,
+          price: data.price,
           currency: product.currency,
-          sizes: allSizes.map((label) => ({ label })),
-          colors: cleanColors.map((c) => ({ label: c.label.trim(), hex: c.hex })),
-          variants,
-          // Persist any saved-image colour assignments made in this editor.
-          imageColorAssignments: Object.entries(savedAssign)
-            .map(([imageId, gkey]) => ({ imageId, colorLabel: labelByKeyAll.get(gkey) ?? "" }))
-            .filter((a) => a.colorLabel),
+          sizes: data.sizes.map((label) => ({ label })),
+          colors: colorRows.map((label) => ({ label, hex: product.colors.find((c) => norm(c.label) === norm(label))?.hex ?? null })),
+          variants: data.variants,
+          attributes: data.attributes,
+          imageColorAssignments: Object.entries(savedAssign).map(([imageId, colorLabel]) => ({ imageId, colorLabel })),
         },
       });
-      const idByLabel = new Map((res.colors ?? []).map((c) => [c.label.toLowerCase(), c.id] as const));
-      const labelByKey = labelByKeyAll;
-      for (const [gkey, files] of Object.entries(pending)) {
-        const label = gkey === "" ? "" : (labelByKey.get(gkey) ?? "");
-        for (const file of files) {
-          const fd = new FormData();
-          fd.append("file", file);
-          fd.append("productId", product.id);
-          const cid = label ? idByLabel.get(label.toLowerCase()) : null;
-          if (cid) fd.append("colorId", cid);
-          await uploadProductImage({ data: fd });
-        }
-      }
+      await uploadPending(product.id, imgs.pending, res.colors ?? []);
     },
     onSuccess: () => { setLoadedId(null); onSaved(); },
     onError: (e) => toast.error(e instanceof Error ? e.message : "فشل حفظ التعديلات."),
@@ -1039,191 +788,56 @@ function EditProductDialog({
 
   if (!product) return null;
 
-  function addColorRow() {
-    setColors((rows) => [...rows, { gkey: nextGroupKey(), label: "", hex: null, size: "", quantity: "" }]);
-  }
-  function addSizeRow(group: EditColor) {
-    setColors((rows) => {
-      const last = rows.map((row) => row.gkey).lastIndexOf(group.gkey);
-      const next = [...rows];
-      next.splice(last + 1, 0, { ...group, size: "", quantity: "" });
-      return next;
-    });
-  }
-
-  /** Delete a colour group; its unsaved images fall back to the general area. */
-  function removeColorGroup(i: number) {
-    const gkey = colorsRef.current[i]?.gkey;
-    setColors((rows) => rows.filter((_, j) => j !== i));
-    if (!gkey) return;
-    if (colorsRef.current.some((row, j) => j !== i && row.gkey === gkey)) return;
-    setSavedAssign((prev) => {
-      const out = { ...prev };
-      for (const [imgId, k] of Object.entries(out)) if (k === gkey) delete out[imgId];
-      return out;
-    });
-    setPending((prev) => {
-      const out: Record<string, File[]> = { ...prev, "": [...(prev[""] ?? []), ...(prev[gkey] ?? [])] };
-      delete out[gkey];
-      return out;
-
-    });
-
-  }
-
-  function removeGroup(gkey: string) {
-    setColors((rows) => rows.filter((row) => row.gkey !== gkey));
-    setSavedAssign((prev) => {
-      const next = { ...prev };
-      for (const [id, key] of Object.entries(next)) if (key === gkey) delete next[id];
-      return next;
-    });
-    setPending((prev) => {
-      const next: Record<string, File[]> = { ...prev, "": [...(prev[""] ?? []), ...(prev[gkey] ?? [])] };
-      delete next[gkey];
-      return next;
-    });
-  }
-
-  /** Move one unsaved image between the general area and a named colour. */
-  function moveFile(fromKey: string, index: number, toKey: string) {
-    const file = (pendingRef.current[fromKey] ?? [])[index];
-    if (!file) return;
-    const target = toKey;
-    if (target === fromKey) return;
-    setPending((prev) => ({
-      ...prev,
-      [fromKey]: (prev[fromKey] ?? []).filter((_, i) => i !== index),
-      [target]: [...(prev[target] ?? []), file],
-    }));
-  }
-
-  /** Add selected product images to the unassigned image area. */
-  function addIntakeFiles(list: FileList | null) {
-    const picked = Array.from(list ?? []).filter((f) => /^image\//i.test(f.type));
-    if (picked.length === 0) return;
-    setPending((prev) => ({ ...prev, "": [...(prev[""] ?? []), ...picked] }));
-  }
-
-
-
-  /** Group picker rendered under each unsaved thumbnail. */
-  function GroupPicker({ fromKey, index }: { fromKey: string; index: number }) {
-    return (
-      <ColorChips
-        options={colorOptions(colors)}
-        value={colors.some((c) => c.gkey === fromKey && c.label.trim()) ? fromKey : ""}
-        onPick={(k) => moveFile(fromKey, index, k)}
-      />
-    );
-  }
-
-  function SavedImageColorPicker({ imageId, value = "" }: { imageId: string; value?: string }) {
-    return (
-      <ColorChips
-        options={colorOptions(colors)}
-        value={savedAssign[imageId] ?? value}
-        onPick={(k) => setSavedAssign((prev) => ({ ...prev, [imageId]: k }))}
-      />
-    );
-  }
-
-  const bad = showErrors ? missingRequiredFields({ name, material, price, rows: colors }) : new Set<string>();
-  const err = (k: string) => (bad.has(k) ? "border-destructive ring-1 ring-destructive" : "");
-
   function trySave() {
-    const missing = missingRequiredFields({ name, material, price, rows: colors });
-    if (missing.size > 0) {
-      setShowErrors(true);
-      toast.error("أكمل الخانات المحددة باللون الأحمر.");
-      return;
-    }
+    setShowErrors(true);
+    try { preparePayload(form); } catch (e) { toast.error(e instanceof Error ? e.message : "أكمل البيانات."); return; }
     save.mutate();
   }
+
+  const colorChoices = form.colors;
 
   return (
     <Dialog open={!!product} onOpenChange={(v) => { if (!v) { setLoadedId(null); setShowErrors(false); } onOpenChange(v); }}>
       <DialogContent dir="rtl" className="max-h-[85vh] max-w-2xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle>تعديل المنتج</DialogTitle>
-          <DialogDescription>
-            ارفع الصور واربط كل صورة بلونها بضغطة، ثم عدّل البيانات والمقاسات.
-          </DialogDescription>
+          <DialogDescription>عدّل الصور والبيانات، والكميات والأسعار من جدول واحد.</DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4">
-          <div className="space-y-3 border-b border-border pb-4">
-            <span className="text-sm font-semibold">١. صور المنتج</span>
-            <UploadZone onFiles={addIntakeFiles} />
+        <div className="space-y-5">
+          <section className="space-y-3 border-b border-border pb-5">
+            <h4 className="text-sm font-semibold">١. صور المنتج</h4>
+            <UploadZone onFiles={imgs.add} />
             <div className="flex flex-wrap gap-3">
               {product.images.map((img) => {
-                const linkedColor = colors.find((c) => c.id === img.color_id);
+                const linked = product.colors.find((c) => c.id === img.color_id)?.label ?? "";
                 return (
-                <div key={img.id} className="w-28 rounded-lg border border-border/60 p-1.5">
-                  <div className="relative">
-                    <img src={img.url} alt="" className="h-24 w-full rounded-md object-cover" />
-                    <button type="button" aria-label="حذف الصورة"
-                      onClick={() => delImg.mutate(img.id)}
-                      className="absolute left-1 top-1 grid h-5 w-5 place-items-center rounded-full bg-destructive text-destructive-foreground">
-                      <X className="h-3 w-3" />
-                    </button>
-                  </div>
-                  <SavedImageColorPicker imageId={img.id} value={linkedColor?.gkey ?? ""} />
-                </div>
-                );
-              })}
-              {Object.entries(pending).flatMap(([fromKey, files]) => files.map((f, k) => (
-                  <div key={`pg-${fromKey}-${k}`} className="w-28 rounded-lg border border-dashed border-primary/50 p-1.5">
+                  <div key={img.id} className="w-28 rounded-lg border border-border/60 p-1.5">
                     <div className="relative">
-                      <img src={URL.createObjectURL(f)} alt={f.name} className="h-24 w-full rounded-md object-cover" />
-                      <button type="button" aria-label="إزالة"
-                        onClick={() => setPending((prev) => ({ ...prev, [fromKey]: (prev[fromKey] ?? []).filter((_, j) => j !== k) }))}
+                      <img src={img.url} alt="" className="h-24 w-full rounded-md object-cover" />
+                      <button type="button" aria-label="حذف الصورة" onClick={() => delImg.mutate(img.id)}
                         className="absolute left-1 top-1 grid h-5 w-5 place-items-center rounded-full bg-destructive text-destructive-foreground">
                         <X className="h-3 w-3" />
                       </button>
                     </div>
-                    <GroupPicker fromKey={fromKey} index={k} />
+                    <ImageGroupChips colors={colorChoices} value={savedAssign[img.id] ?? linked}
+                      onPick={(c) => setSavedAssign((prev) => ({ ...prev, [img.id]: c }))} />
                   </div>
-              )))}
+                );
+              })}
+              {imgs.pending.map((img) => (
+                <PendingThumb key={img.id} img={img} colors={colorChoices}
+                  onRemove={() => imgs.remove(img.id)} onColor={(c) => imgs.setColor(img.id, c)} />
+              ))}
             </div>
-          </div>
-
-          <div className="space-y-3 border-b border-border pb-4">
-            <h4 className="text-sm font-semibold">٢. بيانات المنتج</h4>
-            <div className="space-y-1.5"><label className="text-xs font-medium">اسم المنتج</label><Input className={err("name")} value={name} onChange={(e) => setName(e.target.value)} /></div>
-            <div className="space-y-1.5"><label className="text-xs font-medium">الوصف</label><Textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={3} /></div>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="space-y-1.5"><label className="text-xs font-medium">الخامة</label><Input className={err("material")} value={material} onChange={(e) => setMaterial(e.target.value)} placeholder="مثال: قطن ١٠٠٪" /></div>
-              <div className="space-y-1.5"><label className="text-xs font-medium">السعر</label><Input className={err("price")} type="number" value={price} onChange={(e) => setPrice(e.target.value)} /></div>
-            </div>
-          </div>
-
-          <div className="space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-2"><h4 className={`text-sm font-semibold ${bad.has("rows") ? "text-destructive" : ""}`}>٣. الألوان والمقاسات والكميات</h4><Button size="sm" variant="outline" type="button" onClick={addColorRow}><Plus className="ml-1 h-3.5 w-3.5" /> إضافة لون</Button></div>
-            {Array.from(new Map(colors.map((c) => [c.gkey, c] as const)).values()).map((group) => {
-              const gi = colors.findIndex((c) => c.gkey === group.gkey);
-              return (
-              <div key={group.gkey} className="space-y-3 rounded-md border border-border bg-muted/30 p-3">
-                <div className="flex items-end gap-2"><label className="min-w-0 flex-1 space-y-1 text-xs font-medium">اللون<Input className={err(`label-${gi}`)} value={group.label} placeholder="مثال: أحمر" onChange={(e) => setColors((rows) => rows.map((r) => r.gkey === group.gkey ? { ...r, label: e.target.value } : r))} /></label><Button size="icon" variant="ghost" type="button" aria-label="حذف اللون" onClick={() => removeGroup(group.gkey)}><Trash2 className="h-4 w-4" /></Button></div>
-                {colors.map((c, i) => c.gkey === group.gkey && <div key={i} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-end gap-2">
-                  <label className="min-w-0 space-y-1 text-xs text-muted-foreground">المقاس<Input className={err(`size-${i}`)} value={c.size} placeholder="مثال: L" onChange={(e) => setColors((rows) => rows.map((r, j) => j === i ? { ...r, size: e.target.value } : r))} /></label>
-                  <label className="min-w-0 space-y-1 text-xs text-muted-foreground">الكمية<Input className={err(`qty-${i}`)} type="number" min={0} placeholder="0" value={c.quantity} onChange={(e) => setColors((rows) => rows.map((r, j) => j === i ? { ...r, quantity: e.target.value } : r))} /></label>
-                  <Button size="icon" variant="ghost" type="button" aria-label="حذف المقاس" disabled={colors.filter((r) => r.gkey === group.gkey).length === 1} onClick={() => removeColorGroup(i)}><X className="h-4 w-4" /></Button>
-                </div>)}
-                <Button size="sm" variant="ghost" type="button" onClick={() => addSizeRow(group)}><Plus className="ml-1 h-3.5 w-3.5" /> إضافة مقاس</Button>
-              </div>
-              );
-            })}
-          </div>
+          </section>
+          <ProductFormFields form={form} setForm={setForm} showErrors={showErrors} />
         </div>
 
-
-        {product && (
-          <section className="space-y-1.5 rounded-xl border border-border p-3">
-            <div className="text-sm font-bold">العرض</div>
-            <ProductOfferControl productId={product.id} price={product.price == null ? null : Number(product.price)} currency={product.currency ?? null} offer={(editOffersQ.data ?? []).find((o) => o.product_id === product.id) ?? null} />
-          </section>
-        )}
+        <section className="space-y-1.5 rounded-xl border border-border p-3">
+          <div className="text-sm font-bold">العرض</div>
+          <ProductOfferControl productId={product.id} price={product.price == null ? null : Number(product.price)} currency={product.currency ?? null} offer={(editOffersQ.data ?? []).find((o) => o.product_id === product.id) ?? null} />
+        </section>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>إلغاء</Button>
           <Button onClick={trySave} disabled={save.isPending}>
@@ -1235,4 +849,3 @@ function EditProductDialog({
     </Dialog>
   );
 }
-
