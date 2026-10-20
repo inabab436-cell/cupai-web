@@ -580,7 +580,7 @@ function ProductFormFields({
       </section>
 
       <section className="space-y-3">
-        <h4 className="text-sm font-semibold">٣. الألوان والمقاسات والكمية</h4>
+        <h4 className="text-sm font-semibold">٣. المقاسات والألوان والكمية</h4>
         <VariantMatrixEditor
           colors={form.colors} sizes={form.sizes} rows={form.rows} basePrice={form.price}
           onChange={(n) => setForm({ ...form, ...n })}

@@ -147,3 +147,12 @@ export function cleanSpecs(specs: ProductSpec[]): ProductSpec[] {
   }
   return out.slice(0, 30);
 }
+
+/** Numeric size range, e.g. 40→60 step 2 → ["40","42",…,"60"]. Max 40 sizes. */
+export function sizeRange(from: number, to: number, step = 1): string[] {
+  if (!Number.isFinite(from) || !Number.isFinite(to) || step <= 0) return [];
+  const [a, b] = from <= to ? [from, to] : [to, from];
+  const out: string[] = [];
+  for (let n = a; n <= b && out.length < 40; n += step) out.push(String(n));
+  return out;
+}
