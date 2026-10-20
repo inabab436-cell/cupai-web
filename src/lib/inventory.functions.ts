@@ -24,6 +24,7 @@ export interface ManualProductInput {
   colors?: string[];
   sizes?: string[];
   variants?: ManualVariantInput[];
+  attributes?: { name: string; value: string }[];
 }
 
 export interface AddStockInput {
@@ -205,6 +206,11 @@ export const createManualProduct = createServerFn({ method: "POST" })
       if (sErr) throw new Error(sErr.message);
     }
 
+
+    if (data.attributes?.length) {
+      const { saveProductAttributes } = await import("@/lib/product-attributes.server");
+      await saveProductAttributes(admin, productId, userId, data.attributes);
+    }
 
     // Same missing-information flow as the manual-entry box: a product added
     // from this interface can answer an open topic (price / size / color /

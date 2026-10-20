@@ -29,6 +29,8 @@ export interface VariantDTO {
   color: string | null;
   size: string | null;
   quantity: number | null;
+  /** Per-variant price override; null = product base price. */
+  price: number | null;
 }
 export interface WebsiteProductDTO {
   id: string;
@@ -46,6 +48,8 @@ export interface WebsiteProductDTO {
   colors: ColorDTO[];
   images: ImageDTO[];
   variants: VariantDTO[];
+  /** Custom product specs (name → value). Empty when not migrated yet. */
+  attributes: { name: string; value: string }[];
 }
 
 
@@ -61,9 +65,17 @@ export const listWebsiteProducts = createServerFn({ method: "GET" }).handler(
     const BASE_COLS = "id, name, description, price, currency, is_published, created_at, internal_description_status";
     let res: { data: any[] | null; error: { message: string } | null } = await admin
       .from("products")
-      .select(`${BASE_COLS}, material`)
+      .select(`${BASE_COLS}, material, attributes`)
       .eq("user_id", userId)
       .order("created_at", { ascending: false });
+    if (res.error && /attributes/i.test(res.error.message)) {
+      // `attributes` column not migrated yet — read without it.
+      res = await admin
+        .from("products")
+        .select(`${BASE_COLS}, material`)
+        .eq("user_id", userId)
+        .order("created_at", { ascending: false });
+    }
     if (res.error && /material/i.test(res.error.message)) {
       // `material` column not migrated yet — fall back gracefully.
       res = await admin
@@ -86,7 +98,7 @@ export const listWebsiteProducts = createServerFn({ method: "GET" }).handler(
         .in("product_id", ids).order("position", { ascending: true }),
       admin.from("product_images").select("id, product_id, url, position, color_id, size_id")
         .in("product_id", ids).order("position", { ascending: true }),
-      admin.from("product_variants").select("product_id, color, size, stock, position")
+      admin.from("product_variants").select("product_id, color, size, stock, price, position")
         .in("product_id", ids).order("position", { ascending: true }),
     ]);
 
@@ -109,6 +121,11 @@ export const listWebsiteProducts = createServerFn({ method: "GET" }).handler(
               ? "failed"
               : "generating",
         sizes: [], colors: [], images: [], variants: [],
+        attributes: Array.isArray((r as any).attributes)
+          ? ((r as any).attributes as any[])
+              .filter((a) => a && a.name && a.value)
+              .map((a) => ({ name: String(a.name), value: String(a.value) }))
+          : [],
       });
     }
     for (const v of vr.data ?? []) {
@@ -116,6 +133,7 @@ export const listWebsiteProducts = createServerFn({ method: "GET" }).handler(
         color: ((v as any).color as string | null) ?? null,
         size: ((v as any).size as string | null) ?? null,
         quantity: (v as any).stock == null ? null : Number((v as any).stock),
+        price: (v as any).price == null ? null : Number((v as any).price),
       });
     }
     for (const s of sz.data ?? []) {
@@ -261,7 +279,9 @@ export interface UpsertProductInput {
   sizes: { id?: string; label: string }[];
   colors: { id?: string; label: string; hex?: string | null }[];
   /** Optional per color/size inventory. When omitted, variants are untouched. */
-  variants?: { color?: string | null; size?: string | null; quantity?: number | null }[];
+  variants?: { color?: string | null; size?: string | null; quantity?: number | null; price?: number | null }[];
+  /** Custom specs. When omitted, stored specs are untouched. */
+  attributes?: { name: string; value: string }[];
   /**
    * Re-assign already-saved images to a colour (by label) from the editor.
    */
@@ -299,9 +319,14 @@ export const upsertWebsiteProduct = createServerFn({ method: "POST" })
               v.quantity != null && Number.isFinite(Number(v.quantity))
                 ? Number(v.quantity)
                 : 0,
-
+            // Keep per-variant price overrides (previously dropped on every edit).
+            price:
+              v.price != null && Number.isFinite(Number(v.price)) && Number(v.price) > 0
+                ? Number(v.price)
+                : null,
           }))
         : undefined,
+      attributes: Array.isArray(d.attributes) ? d.attributes : undefined,
       imageColorAssignments: Array.isArray(d.imageColorAssignments)
         ? d.imageColorAssignments
             .filter((a) => a?.imageId && typeof a.colorLabel === "string")
@@ -425,10 +450,15 @@ export const upsertWebsiteProduct = createServerFn({ method: "POST" })
       const { syncVariantsForProduct } = await import("@/lib/product-variants.server");
       const raw = data.variants
         .filter((v) => v.color || v.size || v.quantity != null)
-        .map((v, i) => ({ color: v.color, size: v.size, quantity: v.quantity, position: i }));
+        .map((v, i) => ({ color: v.color, size: v.size, quantity: v.quantity, price: v.price, position: i }));
       await syncVariantsForProduct(admin, productId!, raw);
       await admin.from("products").update({ variants: raw })
         .eq("id", productId!).eq("user_id", userId);
+    }
+
+    if (data.attributes) {
+      const { saveProductAttributes } = await import("@/lib/product-attributes.server");
+      await saveProductAttributes(admin, productId!, userId, data.attributes);
     }
 
     return { id: productId!, colors: newColors, sizes: newSizes };
