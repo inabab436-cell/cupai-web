@@ -27,7 +27,7 @@ import {
   buildMatrix, cleanSpecs, matrixFromVariants, matrixToVariants, mergeLabels, norm, usedLabels,
   type MatrixRow, type ProductSpec,
 } from "@/lib/variant-matrix";
-import { ImageGroupChips, SpecsEditor, VariantMatrixEditor } from "@/components/products/variant-matrix-editor";
+import { ImageGroupChips, VariantMatrixEditor } from "@/components/products/variant-matrix-editor";
 
 
 
@@ -569,8 +569,8 @@ function ProductFormFields({
         </div>
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="space-y-1.5">
-            <label className="text-xs font-medium">السعر الأساسي (ج.م)</label>
-            <Input className={err(!(p > 0))} type="number" value={form.price} onChange={(e) => setForm({ ...form, price: e.target.value })} />
+            <label className="text-xs font-medium">السعر (ج.م)</label>
+            <Input className={err(!(p > 0))} type="number" value={form.price} onChange={(e) => setForm({ ...form, price: e.target.value })} placeholder="مثال: 350" />
           </div>
           <div className="space-y-1.5">
             <label className="text-xs font-medium">الخامة (اختياري)</label>
@@ -579,18 +579,12 @@ function ProductFormFields({
         </div>
       </section>
 
-      <section className="space-y-3 border-b border-border pb-5">
-        <h4 className="text-sm font-semibold">٣. الاختيارات والمخزون</h4>
+      <section className="space-y-3">
+        <h4 className="text-sm font-semibold">٣. الألوان والمقاسات والكمية</h4>
         <VariantMatrixEditor
           colors={form.colors} sizes={form.sizes} rows={form.rows} basePrice={form.price}
           onChange={(n) => setForm({ ...form, ...n })}
         />
-      </section>
-
-      <section className="space-y-3">
-        <h4 className="text-sm font-semibold">٤. خصائص إضافية (اختياري)</h4>
-        <p className="text-xs text-muted-foreground">أي معلومة حسب نوع المنتج: الوزن، السعة، بلد الصنع، الضمان…</p>
-        <SpecsEditor specs={form.specs} onChange={(specs) => setForm({ ...form, specs })} />
       </section>
     </>
   );

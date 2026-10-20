@@ -4,33 +4,44 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { buildMatrix, mergeLabels, norm, parseList, rowKey, type MatrixRow, type ProductSpec } from "@/lib/variant-matrix";
 
-/** Chip list with a bulk input: "أحمر، أزرق، أسود" + Enter adds all at once. */
+const QUICK_SIZES = ["S", "M", "L", "XL", "XXL", "3XL"];
+
+/** Chip list: type several at once ("أحمر، أزرق") or tap a quick chip. */
 function LabelList({
-  title, placeholder, values, onChange,
-}: { title: string; placeholder: string; values: string[]; onChange: (v: string[]) => void }) {
+  title, placeholder, values, onChange, quick = [],
+}: { title: string; placeholder: string; values: string[]; onChange: (v: string[]) => void; quick?: string[] }) {
   const [text, setText] = useState("");
   function commit() {
     const add = parseList(text);
     if (add.length) onChange(mergeLabels(values, add));
     setText("");
   }
+  const has = (v: string) => values.some((x) => norm(x) === norm(v));
   return (
     <div className="space-y-2">
       <label className="text-xs font-medium">{title}</label>
+      {quick.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {quick.map((q) => (
+            <button key={q} type="button"
+              onClick={() => onChange(has(q) ? values.filter((x) => norm(x) !== norm(q)) : [...values, q])}
+              className={`min-w-11 rounded-md border px-3 py-1.5 text-sm font-medium transition ${has(q) ? "border-primary bg-primary text-primary-foreground" : "border-border bg-background"}`}>
+              {q}
+            </button>
+          ))}
+        </div>
+      )}
       <div className="flex gap-2">
-        <Input
-          value={text}
-          placeholder={placeholder}
+        <Input value={text} placeholder={placeholder}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); commit(); } }}
-          onBlur={commit}
-        />
+          onBlur={commit} />
         <Button type="button" size="sm" variant="outline" onClick={commit}><Plus className="h-4 w-4" /></Button>
       </div>
-      {values.length > 0 && (
+      {values.filter((v) => !quick.some((q) => norm(q) === norm(v))).length > 0 && (
         <div className="flex flex-wrap gap-1.5">
-          {values.map((v) => (
-            <span key={v} className="inline-flex items-center gap-1 rounded-full border border-border bg-muted px-2.5 py-0.5 text-xs">
+          {values.filter((v) => !quick.some((q) => norm(q) === norm(v))).map((v) => (
+            <span key={v} className="inline-flex items-center gap-1 rounded-full border border-border bg-muted px-2.5 py-1 text-xs">
               {v}
               <button type="button" aria-label={`حذف ${v}`} onClick={() => onChange(values.filter((x) => x !== v))}>
                 <X className="h-3 w-3" />
@@ -52,74 +63,52 @@ export function VariantMatrixEditor({
   basePrice: string;
   onChange: (next: { colors: string[]; sizes: string[]; rows: MatrixRow[] }) => void;
 }) {
-  const [bulkStock, setBulkStock] = useState("");
-  const [bulkPrice, setBulkPrice] = useState("");
+  // Per-row price is hidden unless the merchant asks for it (or one already exists).
+  const [showPrices, setShowPrices] = useState(() => rows.some((r) => r.price.trim() !== ""));
 
   const setLists = (c: string[], s: string[]) => onChange({ colors: c, sizes: s, rows: buildMatrix(c, s, rows) });
   const patch = (key: string, p: Partial<MatrixRow>) =>
     onChange({ colors, sizes, rows: rows.map((r) => (rowKey(r.color, r.size) === key ? { ...r, ...p } : r)) });
-  const applyAll = (p: Partial<MatrixRow>) =>
-    onChange({ colors, sizes, rows: rows.map((r) => (r.enabled ? { ...r, ...p } : r)) });
+  const togglePrices = (on: boolean) => {
+    setShowPrices(on);
+    if (!on) onChange({ colors, sizes, rows: rows.map((r) => ({ ...r, price: "" })) });
+  };
 
   const enabled = rows.filter((r) => r.enabled);
   const total = enabled.reduce((n, r) => n + (Number(r.stock) || 0), 0);
 
   return (
     <div className="space-y-4">
-      <div className="grid gap-4 sm:grid-cols-2">
-        <LabelList title="الألوان (اختياري)" placeholder="أحمر، أزرق، أسود" values={colors} onChange={(c) => setLists(c, sizes)} />
-        <LabelList title="المقاسات (اختياري)" placeholder="S, M, L, XL" values={sizes} onChange={(s) => setLists(colors, s)} />
-      </div>
-      <p className="text-xs text-muted-foreground">
-        اكتب كل الألوان أو المقاسات مرة واحدة مفصولة بفاصلة، وهتتعمل كل التركيبات تلقائيًا. لو المنتج بدون ألوان أو مقاسات سيبها فاضية.
-      </p>
+      <LabelList title="المقاسات" placeholder="مقاس آخر: 38، 40، فري سايز…" values={sizes} quick={QUICK_SIZES} onChange={(s) => setLists(colors, s)} />
+      <LabelList title="الألوان" placeholder="اكتب الألوان: أسود، أبيض، كحلي" values={colors} onChange={(c) => setLists(c, sizes)} />
 
-      <div className="flex flex-wrap items-end gap-2 rounded-lg bg-muted/40 p-2">
-        <label className="space-y-1 text-xs">كمية للكل
-          <Input className="h-8 w-24" type="number" min={0} value={bulkStock} onChange={(e) => setBulkStock(e.target.value)} />
+      <div className="space-y-2">
+        <p className="text-xs font-medium">اكتب الكمية المتوفرة من كل قطعة (0 = مش متوفر)</p>
+        <div className="divide-y divide-border rounded-lg border border-border">
+          {rows.map((r) => {
+            const key = rowKey(r.color, r.size);
+            const label = [r.color, r.size].filter(Boolean).join(" — ") || "الكمية";
+            return (
+              <div key={key} className="flex items-center gap-2 p-2">
+                <span className="flex-1 text-sm font-medium">{label}</span>
+                <Input className="h-9 w-20 text-center" type="number" min={0} inputMode="numeric" placeholder="0"
+                  aria-label={`كمية ${label}`} value={r.stock}
+                  onChange={(e) => patch(key, { stock: e.target.value, enabled: true })} />
+                {showPrices && (
+                  <Input className="h-9 w-24 text-center" type="number" min={0} inputMode="numeric"
+                    placeholder={basePrice || "السعر"} aria-label={`سعر ${label}`} value={r.price}
+                    onChange={(e) => patch(key, { price: e.target.value })} />
+                )}
+              </div>
+            );
+          })}
+        </div>
+        <p className="text-xs text-muted-foreground">إجمالي القطع: {total}</p>
+        <label className="flex items-center gap-2 text-xs text-muted-foreground">
+          <input type="checkbox" className="h-4 w-4 accent-primary" checked={showPrices} onChange={(e) => togglePrices(e.target.checked)} />
+          بعض المقاسات أو الألوان سعرها مختلف
         </label>
-        <Button type="button" size="sm" variant="outline" disabled={bulkStock === ""} onClick={() => applyAll({ stock: bulkStock })}>تطبيق</Button>
-        <label className="space-y-1 text-xs">سعر للكل
-          <Input className="h-8 w-24" type="number" min={0} value={bulkPrice} placeholder={basePrice} onChange={(e) => setBulkPrice(e.target.value)} />
-        </label>
-        <Button type="button" size="sm" variant="outline" onClick={() => applyAll({ price: bulkPrice })}>تطبيق</Button>
       </div>
-
-      <div className="overflow-x-auto rounded-lg border border-border">
-        <table className="w-full text-sm">
-          <thead className="bg-muted/50 text-xs text-muted-foreground">
-            <tr>
-              <th className="p-2 text-start">متوفر</th>
-              <th className="p-2 text-start">التركيبة</th>
-              <th className="p-2 text-start">الكمية</th>
-              <th className="p-2 text-start">السعر</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => {
-              const key = rowKey(r.color, r.size);
-              const label = [r.color, r.size].filter(Boolean).join(" / ") || "المنتج (بدون اختيارات)";
-              return (
-                <tr key={key} className={`border-t border-border ${r.enabled ? "" : "opacity-50"}`}>
-                  <td className="p-2">
-                    <input type="checkbox" aria-label={`متوفر ${label}`} checked={r.enabled} onChange={(e) => patch(key, { enabled: e.target.checked })} className="h-4 w-4 accent-primary" />
-                  </td>
-                  <td className="p-2 font-medium">{label}</td>
-                  <td className="p-2">
-                    <Input className="h-8 w-20" type="number" min={0} placeholder="0" disabled={!r.enabled} value={r.stock} onChange={(e) => patch(key, { stock: e.target.value })} />
-                  </td>
-                  <td className="p-2">
-                    <Input className="h-8 w-24" type="number" min={0} placeholder={basePrice || "السعر"} disabled={!r.enabled} value={r.price} onChange={(e) => patch(key, { price: e.target.value })} />
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-      <p className="text-xs text-muted-foreground">
-        {enabled.length} تركيبة متوفرة · إجمالي الكمية {total}. شيل علامة «متوفر» من أي تركيبة مش موجودة عندك. السعر الفاضي = السعر الأساسي.
-      </p>
     </div>
   );
 }
