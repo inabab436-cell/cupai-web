@@ -484,25 +484,6 @@ function QuickStockDialog({
 // ---------------------------------------------------------------------------
 
 /** Big, first-thing upload area for product images. */
-function UploadZone({ onFiles }: { onFiles: (list: FileList | null) => void }) {
-  const [dragOver, setDragOver] = useState(false);
-  return (
-    <label
-      className={`flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed px-4 py-7 text-center transition hover:border-primary hover:bg-primary/5 ${dragOver ? "border-primary bg-primary/5" : "border-border"}`}
-      onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-      onDragLeave={() => setDragOver(false)}
-      onDrop={(e) => { e.preventDefault(); setDragOver(false); onFiles(e.dataTransfer.files); }}
-    >
-      <span className="grid h-12 w-12 place-items-center rounded-full bg-primary/10">
-        <ImagePlus className="h-6 w-6 text-primary" />
-      </span>
-      <span className="text-sm font-semibold">ارفع صور المنتج</span>
-      <span className="text-xs text-muted-foreground">الصور عامة للمنتج تلقائيًا — وتقدر (اختياري) تخصص أي صورة للون معيّن</span>
-      <input type="file" accept="image/*" multiple className="hidden" onChange={(e) => { onFiles(e.target.files); e.currentTarget.value = ""; }} />
-    </label>
-  );
-}
-
 type PendingImage = { id: number; file: File; url: string; color: string };
 let pendingSeq = 0;
 
