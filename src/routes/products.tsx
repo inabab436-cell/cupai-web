@@ -614,21 +614,6 @@ function usePendingImages() {
   return { pending, setPending, add, remove, setColor };
 }
 
-function PendingThumb({ img, colors, onRemove, onColor }: { img: PendingImage; colors: string[]; onRemove: () => void; onColor: (c: string) => void }) {
-  return (
-    <div className="w-28 rounded-lg border border-dashed border-primary/50 p-1.5">
-      <div className="relative">
-        <img src={img.url} alt={img.file.name} className="h-24 w-full rounded-md object-cover" />
-        <button type="button" onClick={onRemove} aria-label="حذف الصورة"
-          className="absolute left-1 top-1 grid h-5 w-5 place-items-center rounded-full bg-destructive text-destructive-foreground">
-          <X className="h-3 w-3" />
-        </button>
-      </div>
-      <ImageGroupChips colors={colors} value={img.color} onPick={onColor} />
-    </div>
-  );
-}
-
 function AddProductDialog({
   open, onOpenChange, onCreated,
 }: {
