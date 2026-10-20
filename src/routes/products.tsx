@@ -639,7 +639,6 @@ function AddProductDialog({
   const imgs = usePendingImages();
   const [showErrors, setShowErrors] = useState(false);
   const [offerOn, setOfferOn] = useState(false);
-  const [offerType, setOfferType] = useState<"percent" | "amount">("percent");
   const [offerValue, setOfferValue] = useState("");
 
   function reset() {
@@ -652,9 +651,11 @@ function AddProductDialog({
       const data = preparePayload(form);
       const res = await createManualProduct({ data });
       await uploadPending(res.productId, imgs.pending, res.colors ?? []);
-      if (offerOn && Number(offerValue) > 0) {
+      const sale = Number(offerValue);
+      const base = Number(form.price);
+      if (offerOn && sale > 0 && sale < base) {
         try {
-          await setProductPieceOffer({ data: { productId: res.productId, discount_type: offerType, discount_value: Number(offerValue) } });
+          await setProductPieceOffer({ data: { productId: res.productId, discount_type: "amount", discount_value: Math.round((base - sale) * 100) / 100 } });
         } catch (e) {
           toast.error(e instanceof Error ? e.message : "تم حفظ المنتج لكن تعذّر حفظ العرض.");
         }
@@ -697,17 +698,19 @@ function AddProductDialog({
 
         <section className="space-y-2 rounded-xl border border-border p-3">
           {!offerOn ? (
-            <Button size="sm" variant="outline" type="button" onClick={() => setOfferOn(true)}>إضافة عرض</Button>
+            <Button size="sm" variant="outline" type="button" className="w-full" onClick={() => setOfferOn(true)}>+ إضافة عرض</Button>
           ) : (
             <>
-              <div className="flex items-center justify-between text-sm font-bold">العرض
+              <div className="flex items-center justify-between text-sm font-bold">السعر بعد الخصم
                 <Button size="sm" variant="ghost" type="button" onClick={() => { setOfferOn(false); setOfferValue(""); }}>إلغاء العرض</Button>
               </div>
-              <div className="grid grid-cols-2 gap-2">
-                <Button size="sm" type="button" variant={offerType === "percent" ? "default" : "outline"} onClick={() => setOfferType("percent")}>نسبة مئوية %</Button>
-                <Button size="sm" type="button" variant={offerType === "amount" ? "default" : "outline"} onClick={() => setOfferType("amount")}>مبلغ من القطعة</Button>
-              </div>
-              <Input type="number" min={0} value={offerValue} onChange={(e) => setOfferValue(e.target.value)} placeholder={offerType === "percent" ? "مثال: 20" : "مثال: 100"} />
+              <Input type="number" min={0} inputMode="numeric" className="h-11 text-base" value={offerValue}
+                onChange={(e) => setOfferValue(e.target.value)} placeholder={form.price ? `أقل من ${form.price}` : "مثال: 300"} />
+              {Number(offerValue) > 0 && Number(form.price) > 0 && (
+                Number(offerValue) < Number(form.price)
+                  ? <p className="text-xs text-muted-foreground">العميل هيشوف: <span className="font-bold text-destructive">{offerValue} ج.م</span> بدل <span className="line-through">{form.price} ج.م</span></p>
+                  : <p className="text-xs text-destructive">لازم السعر بعد الخصم يكون أقل من سعر المنتج.</p>
+              )}
             </>
           )}
         </section>
