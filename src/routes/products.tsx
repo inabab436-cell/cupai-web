@@ -27,7 +27,8 @@ import {
   buildMatrix, cleanSpecs, matrixFromVariants, matrixToVariants, mergeLabels, norm, usedLabels,
   type MatrixRow, type ProductSpec,
 } from "@/lib/variant-matrix";
-import { ImageGroupChips, VariantMatrixEditor } from "@/components/products/variant-matrix-editor";
+import { ImageBoard } from "@/components/products/image-board";
+import { VariantMatrixEditor } from "@/components/products/variant-matrix-editor";
 
 
 
@@ -483,25 +484,6 @@ function QuickStockDialog({
 // ---------------------------------------------------------------------------
 
 /** Big, first-thing upload area for product images. */
-function UploadZone({ onFiles }: { onFiles: (list: FileList | null) => void }) {
-  const [dragOver, setDragOver] = useState(false);
-  return (
-    <label
-      className={`flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed px-4 py-7 text-center transition hover:border-primary hover:bg-primary/5 ${dragOver ? "border-primary bg-primary/5" : "border-border"}`}
-      onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-      onDragLeave={() => setDragOver(false)}
-      onDrop={(e) => { e.preventDefault(); setDragOver(false); onFiles(e.dataTransfer.files); }}
-    >
-      <span className="grid h-12 w-12 place-items-center rounded-full bg-primary/10">
-        <ImagePlus className="h-6 w-6 text-primary" />
-      </span>
-      <span className="text-sm font-semibold">ارفع صور المنتج</span>
-      <span className="text-xs text-muted-foreground">الصور عامة للمنتج تلقائيًا — وتقدر (اختياري) تخصص أي صورة للون معيّن</span>
-      <input type="file" accept="image/*" multiple className="hidden" onChange={(e) => { onFiles(e.target.files); e.currentTarget.value = ""; }} />
-    </label>
-  );
-}
-
 type PendingImage = { id: number; file: File; url: string; color: string };
 let pendingSeq = 0;
 
@@ -604,28 +586,13 @@ async function uploadPending(productId: string, pending: PendingImage[], colors:
 
 function usePendingImages() {
   const [pending, setPending] = useState<PendingImage[]>([]);
-  const add = (list: FileList | null) => {
+  const add = (list: FileList | null, color = "") => {
     const picked = Array.from(list ?? []).filter((f) => /^image\//i.test(f.type));
-    if (picked.length) setPending((prev) => [...prev, ...picked.map((file) => ({ id: ++pendingSeq, file, url: URL.createObjectURL(file), color: "" }))]);
+    if (picked.length) setPending((prev) => [...prev, ...picked.map((file) => ({ id: ++pendingSeq, file, url: URL.createObjectURL(file), color }))]);
   };
   const remove = (id: number) => setPending((prev) => prev.filter((p) => p.id !== id));
   const setColor = (id: number, color: string) => setPending((prev) => prev.map((p) => (p.id === id ? { ...p, color } : p)));
   return { pending, setPending, add, remove, setColor };
-}
-
-function PendingThumb({ img, colors, onRemove, onColor }: { img: PendingImage; colors: string[]; onRemove: () => void; onColor: (c: string) => void }) {
-  return (
-    <div className="w-28 rounded-lg border border-dashed border-primary/50 p-1.5">
-      <div className="relative">
-        <img src={img.url} alt={img.file.name} className="h-24 w-full rounded-md object-cover" />
-        <button type="button" onClick={onRemove} aria-label="حذف الصورة"
-          className="absolute left-1 top-1 grid h-5 w-5 place-items-center rounded-full bg-destructive text-destructive-foreground">
-          <X className="h-3 w-3" />
-        </button>
-      </div>
-      <ImageGroupChips colors={colors} value={img.color} onPick={onColor} />
-    </div>
-  );
 }
 
 function AddProductDialog({
@@ -681,19 +648,13 @@ function AddProductDialog({
         </DialogHeader>
 
         <div className="space-y-5">
-          <section className="space-y-3 border-b border-border pb-5">
-            <h4 className="text-sm font-semibold">١. صور المنتج</h4>
-            <UploadZone onFiles={imgs.add} />
-            {imgs.pending.length > 0 && (
-              <div className="flex flex-wrap gap-3">
-                {imgs.pending.map((img) => (
-                  <PendingThumb key={img.id} img={img} colors={usedLabels(form.rows).colors}
-                    onRemove={() => imgs.remove(img.id)} onColor={(c) => imgs.setColor(img.id, c)} />
-                ))}
-              </div>
-            )}
-          </section>
           <ProductFormFields form={form} setForm={setForm} showErrors={showErrors} />
+          <section className="space-y-3">
+            <h4 className="text-sm font-semibold">٤. الصور</h4>
+            <ImageBoard colors={usedLabels(form.rows).colors}
+              items={imgs.pending.map((img) => ({ key: `p${img.id}`, url: img.url, group: img.color, onRemove: () => imgs.remove(img.id) }))}
+              onAdd={(f, g) => imgs.add(f, g)} onMove={(k, g) => imgs.setColor(Number(k.slice(1)), g)} />
+          </section>
         </div>
 
         <section className="space-y-2 rounded-xl border border-border p-3">
@@ -802,33 +763,21 @@ function EditProductDialog({
         </DialogHeader>
 
         <div className="space-y-5">
-          <section className="space-y-3 border-b border-border pb-5">
-            <h4 className="text-sm font-semibold">١. صور المنتج</h4>
-            <UploadZone onFiles={imgs.add} />
-            <div className="flex flex-wrap gap-3">
-              {product.images.map((img) => {
-                const linked = product.colors.find((c) => c.id === img.color_id)?.label ?? "";
-                return (
-                  <div key={img.id} className="w-28 rounded-lg border border-border/60 p-1.5">
-                    <div className="relative">
-                      <img src={img.url} alt="" className="h-24 w-full rounded-md object-cover" />
-                      <button type="button" aria-label="حذف الصورة" onClick={() => delImg.mutate(img.id)}
-                        className="absolute left-1 top-1 grid h-5 w-5 place-items-center rounded-full bg-destructive text-destructive-foreground">
-                        <X className="h-3 w-3" />
-                      </button>
-                    </div>
-                    <ImageGroupChips colors={colorChoices} value={savedAssign[img.id] ?? linked}
-                      onPick={(c) => setSavedAssign((prev) => ({ ...prev, [img.id]: c }))} />
-                  </div>
-                );
-              })}
-              {imgs.pending.map((img) => (
-                <PendingThumb key={img.id} img={img} colors={colorChoices}
-                  onRemove={() => imgs.remove(img.id)} onColor={(c) => imgs.setColor(img.id, c)} />
-              ))}
-            </div>
-          </section>
           <ProductFormFields form={form} setForm={setForm} showErrors={showErrors} />
+          <section className="space-y-3">
+            <h4 className="text-sm font-semibold">٤. الصور</h4>
+            <ImageBoard colors={colorChoices}
+              items={[
+                ...product.images.map((img) => ({
+                  key: `s${img.id}`, url: img.url,
+                  group: savedAssign[img.id] ?? (product.colors.find((c) => c.id === img.color_id)?.label ?? ""),
+                  onRemove: () => delImg.mutate(img.id),
+                })),
+                ...imgs.pending.map((img) => ({ key: `p${img.id}`, url: img.url, group: img.color, onRemove: () => imgs.remove(img.id) })),
+              ]}
+              onAdd={(f, g) => imgs.add(f, g)}
+              onMove={(k, g) => k.startsWith("p") ? imgs.setColor(Number(k.slice(1)), g) : setSavedAssign((prev) => ({ ...prev, [k.slice(1)]: g }))} />
+          </section>
         </div>
 
         <section className="space-y-1.5 rounded-xl border border-border p-3">
