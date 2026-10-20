@@ -43,7 +43,7 @@ describe("variant matrix", () => {
   });
 });
 
-import { sizeRange as _sizeRange } from "../src/lib/variant-matrix";
+import { sizeRange as _sizeRange } from "@/lib/variant-matrix";
 describe("sizeRange", () => {
   it("40 to 60 by 2 gives 11 sizes", () => {
     const r = _sizeRange(40, 60, 2);
