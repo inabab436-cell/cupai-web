@@ -10,6 +10,7 @@ import {
 
 import { getActivationStatus } from "@/lib/activation.functions";
 
+import { TeamUploadService } from "@/components/team-upload-service";
 import { PageShell, PageHero, SurfaceCard, SectionHeader } from "@/components/layout/page-shell";
 import { getSessionInfo, logout, deleteAccount } from "@/lib/auth.functions";
 import { getSiteState } from "@/lib/website.functions";
@@ -213,6 +214,7 @@ function AccountPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      <div className="mt-5"><TeamUploadService /></div>
     </PageShell>
   );
 }

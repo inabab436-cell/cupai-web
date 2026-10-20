@@ -2,7 +2,6 @@ import type { ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 import { useHubBadges, badgeText } from "@/lib/hub-badges";
 import { CupaiLogo } from "@/components/cupai-logo";
-import { TeamUploadService } from "@/components/team-upload-service";
 import {
   ChevronLeft,
   ClipboardList,
@@ -59,7 +58,6 @@ export function HubShell({
         </div>
 
         {children}
-        <TeamUploadService />
       </div>
 
       <HubTabBar />

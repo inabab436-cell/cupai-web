@@ -12,7 +12,6 @@ import { HubTabBar } from "@/components/hub/hub-shell";
 import { MerchantProfileMenu } from "@/components/hub/merchant-profile-menu";
 import { SiteIdentity, SiteSettingsButton, SiteLinkCard } from "@/components/website/site-link-bar";
 import { useHubBadges, badgeText } from "@/lib/hub-badges";
-import { TeamUploadService } from "@/components/team-upload-service";
 
 export const Route = createFileRoute("/dashboard")({
   head: () => ({
@@ -109,7 +108,6 @@ function DashboardPage() {
 
         <main className="mx-auto max-w-6xl space-y-7 px-4 py-6 sm:px-6 lg:py-8">
           <SiteLinkCard />
-          <TeamUploadService />
           <section>
             <div className="mb-4">
               <p className="text-xs font-semibold text-primary">اليوم في متجرك</p>

@@ -15,7 +15,6 @@ import { completeSetup } from "@/lib/auth.functions";
 import { getSiteState, updateWebsiteIdentity, uploadWebsiteLogo } from "@/lib/website.functions";
 import { getActivationStatus, requestActivation, type ActivationStatus } from "@/lib/activation.functions";
 import { ONBOARDING_DONE_KEY } from "@/lib/onboarding";
-import { TeamUploadService } from "@/components/team-upload-service";
 
 export const Route = createFileRoute("/welcome")({
   head: () => ({
@@ -135,7 +134,6 @@ function WelcomePage() {
 
       <main className="mx-auto w-full max-w-2xl flex-1 px-4 py-6 sm:py-10">
         <Progress step={step} />
-        <div className="mt-6"><TeamUploadService /></div>
 
         <div key={step} className="mt-8 animate-in fade-in slide-in-from-bottom-2 duration-300">
           {step === 0 && (
